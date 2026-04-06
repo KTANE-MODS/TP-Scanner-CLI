@@ -11,6 +11,7 @@ namespace TP_Scanner
         static string localJSONPath = "modules.json"; //The path of the JSON file
         static string jsonUrl = "https://ktane.timwi.de/json/raw"; //the url to download the json
         static string moduleInstalledPath = @"C:\Program Files (x86)\Steam\steamapps\workshop\content\341800\"; //Path where modules are installed
+        static string unityDllPath = @"C:\Program Files\Unity\Hub\Editor\2017.4.22f1\Editor\Data\Managed\UnityEngine.dll"; //Path to KTANE UnityEngine.dll
         static bool warnLogs = false; //if warning logs should appears
         static bool moduleLogs = false; //if the list of moduels should be printed
         #endregion
@@ -72,11 +73,15 @@ namespace TP_Scanner
                 mod.HasAutoSolver = RepoEntry.TPStatus.Unknown;
             }
 
+            // Load UnityEngine from KTANE path
+            var unityAssembly = Assembly.LoadFrom(unityDllPath);
+            var monoBehaviourType = unityAssembly.GetType("UnityEngine.MonoBehaviour");
+
             //Check with modules have TP Support
             for (int i = 0; i < installedModules.Count; i++)
             {
                 UpdateProgress("Checking for TP support:", i + 1, installedModules.Count);
-                CheckForSupport(installedModules[i]);
+                CheckForSupport(installedModules[i], monoBehaviourType);
             }
             Console.WriteLine($"{installedModules.Count(m => m.HasTPSupport == RepoEntry.TPStatus.True)} modules have TP support");
             Console.WriteLine($"{installedModules.Count(m => m.HasAutoSolver == RepoEntry.TPStatus.True)} modules have auto solvers");
@@ -113,27 +118,35 @@ namespace TP_Scanner
         }
 
         //Checks to see if a module have TP support and an autosolver at once to reduce load dlls
-        static void CheckForSupport(RepoEntry mod)
+        static void CheckForSupport(RepoEntry mod, Type monoBehaviourType)
         {
+            
+            if (!File.Exists(unityDllPath))
+            {
+                WarnLog("UnityEngine.dll not found");
+                return;
+            }
+
+            if (monoBehaviourType == null)
+            {
+                WarnLog("MonoBehaviour type not found");
+                return;
+            }
+
             foreach (string dll in mod.GetDLLPaths())
             {
                 try
                 {
-                    var assembly = Assembly.LoadFrom(dll);
+                    var modAssembly = Assembly.LoadFrom(dll);
+                    var types = modAssembly.GetTypes();
 
-                    var validTypes = assembly.GetTypes()
+                    // Find all MonoBehaviour derived types
+                    var validTypes = modAssembly.GetTypes()
                         .Where(t =>
-                        {
-                            Type? baseType = t.BaseType;
-                            while (baseType != null)
-                            {
-                                if (baseType.FullName == "UnityEngine.MonoBehaviour")
-                                    return true;
-
-                                baseType = baseType.BaseType;
-                            }
-                            return false;
-                        });
+                            t != null &&
+                            monoBehaviourType.IsAssignableFrom(t) &&
+                            !t.IsAbstract)
+                        .ToList();
 
                     bool hasTPSupport = validTypes.Any(t => t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
                                                     .Any(m => m.Name == "ProcessTwitchCommand"));
